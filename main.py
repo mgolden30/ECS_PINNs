@@ -5,7 +5,7 @@ import time
 import torch.optim as optim
 from torch import nn
 from lib.StreamfunctionNetwork import StreamfunctionNetwork
-from scipy.io import savemat
+from scipy.io import savemat, loadmat
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -14,15 +14,32 @@ seed_value = 1
 torch.manual_seed(seed_value)
 torch.cuda.manual_seed_all(seed_value)
 
-learning_rate = 1e-2
-epochs = 1024
+learning_rate = 1e-4
+epochs = 1024*8
 
 nu = 1.0/40 #fluid viscosity
 nx = 64 #points in space
 nt = 64 #points in time
 
+t0 = 3.0 #guess of period
+a0 = 0.0 #guess of drift
+
+data = loadmat("learned_state.mat")
+
+aux = data["aux"]
+t0 = aux[0][0]
+a0 = aux[0][1]
+
+
+
 #must start with 6 and end with 1
-widths = [6, 64, 64, 64, 1]
+widths = [6, 128, 128, 128, 1]
+
+network = StreamfunctionNetwork(widths)
+
+network = torch.load("network.pth", map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"), weights_only=False )
+#network.load_state_dict(state_dict)
+
 
 def generate_uniform_grid(nx, nt):
     #Both space and time are nondimensionalized to [0,2pi]
@@ -48,9 +65,9 @@ def generate_uniform_grid(nx, nt):
 
     #2/3rds dealiasing mask
     mask = (abs(kx) < nx/3) * (abs(ky) < nx/3) * (abs(kt) < nt/3)
+    mask[0,0,0] = 0 #kill mean value
 
     return xs, kx, ky, kt, mask
-
 
 
 xs, kx, ky, kt, mask = generate_uniform_grid(nx,nt)
@@ -59,14 +76,8 @@ xs, kx, ky, kt, mask = generate_uniform_grid(nx,nt)
 forcing = -4*torch.cos(4*xs[:,1])
 forcing = torch.reshape( forcing, [nx, nx, nt] ).to(device)
 
-t0 = 6.0
-a0 = 0.0
 aux = torch.tensor( [t0, a0] ).to(device)
-
-network = StreamfunctionNetwork(widths, t0, a0)
-
-psi = network.forward(xs)
-
+aux.requires_grad = True
 
 network = network.to(device)
 xs = xs.to(device)
@@ -106,11 +117,17 @@ def eval_loss( xs, kx, ky, kt, mask ):
     navier_stokes = torch.real(navier_stokes)
 
     criterion = nn.MSELoss()
+
     loss = criterion( navier_stokes, torch.zeros_like(navier_stokes) )
+    
+    #Prevent static solution
+    loss = loss * (1.0 + 1.0/torch.mean( torch.square(torch.real(wt)) ))
+
     return loss, navier_stokes
 
 # Use an optimizer (e.g., Adam) to update the model parameters
-optimizer = optim.Adam( network.parameters(), lr=learning_rate)
+optimizer = optim.Adam(list(network.parameters()) + [aux], lr=learning_rate)
+
 loss_history = torch.zeros( (epochs) )
 walltimes = torch.zeros( epochs )
 
@@ -145,4 +162,5 @@ psi = torch.fft.fftn(psi)
 psi = psi * mask
 w   = torch.fft.ifftn( psi * (kx*kx + ky*ky) )
 
-savemat( "learned_state.mat", {"w": w.cpu().numpy(), "ns": navier_stokes.cpu().numpy(), "loss": loss_history} )
+torch.save( network, "network.pth")
+savemat( "learned_state.mat", {"w": w.cpu().numpy(), "ns": navier_stokes.cpu().numpy(), "loss": loss_history, "aux": aux.detach().cpu().numpy() } )

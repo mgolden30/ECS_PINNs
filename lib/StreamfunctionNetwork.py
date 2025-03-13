@@ -14,13 +14,13 @@ class CustomActivation(nn.Module):
         super().__init__()
 
     def forward(self, x):
-        #return torch.sin(x)
-        return torch.cos(x)
+        return torch.sinc(x)
+        #return torch.cos(x)
         #return torch.exp( - torch.square(x) )
 
 
 class StreamfunctionNetwork(nn.Module):
-    def __init__( self, widths, T0, a0 ):
+    def __init__( self, widths):
         super().__init__()
 
         #We will have 6 inputs after the periodic layer
@@ -35,10 +35,6 @@ class StreamfunctionNetwork(nn.Module):
             if i < len(widths) - 2:  # Avoid adding activation after the last layer
                 layers.append(act)          
         self.seq = nn.Sequential(*layers)
-
-        #Define trainable parameters for period and drift velocity
-        self.T = nn.Parameter(torch.tensor([T0]), requires_grad=True)  # period
-        self.a = nn.Parameter(torch.tensor([a0]),  requires_grad=True) # drift
         
     def forward(self, x):
         #Just compute the streamfunction
